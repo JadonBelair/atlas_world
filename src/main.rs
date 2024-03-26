@@ -1,15 +1,25 @@
-use std::io::BufReader;
+use std::{io::BufReader, path::Path};
 
 use macroquad::prelude::*;
 use serde::{Deserialize, Serialize};
 use ahash::AHashMap;
 
+const VIEWPORT_WIDTH: i32 = 320;
+const VIEWPORT_HEIGHT: i32 = 180;
+
 fn window_conf() -> Conf {
+    let screen_size = if VIEWPORT_WIDTH as f32 * 0.7 < 640.0 {
+        let ratio = VIEWPORT_WIDTH as f32 / VIEWPORT_HEIGHT as f32;
+        ((640.0 / 0.7) as i32, (640.0 / 0.7 / ratio) as i32)
+    } else {
+        (VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
+    };
+
     Conf {
         window_title: String::from("dugeon crawler"),
         window_resizable: true,
-        window_width: 640,
-        window_height: 360,
+        window_width: screen_size.0,
+        window_height: screen_size.1,
         ..Default::default()
     }
 }
@@ -49,38 +59,23 @@ struct Atlas {
     texture: Texture2D,
 }
 
-// struct AtlasCollection {
-//     atlas: HashMap<String, Atlas>,
-// }
-
 type AtlasCollection = AHashMap<String, Atlas>;
 trait LoadAtlas {
-    fn load() -> Self;
+    fn load<P: AsRef<Path>>(&mut self, atlas_id: &str, image_data: &[u8], data_path: P);
 }
 
 impl LoadAtlas for AtlasCollection {
-    fn load() -> Self {
-        let mut h = AHashMap::new();
-
-        let f = std::fs::File::open("atlas.json").unwrap();
+    fn load<P: AsRef<Path>>(&mut self, atlas_id: &str, image_data: &[u8], data_path: P) {
+        let f = std::fs::File::open(data_path).unwrap();
         let buf = BufReader::new(f);
         let atlas_info = serde_json::from_reader(buf).unwrap();
+        let texture = Texture2D::from_file_with_format(image_data, None);
+        texture.set_filter(FilterMode::Nearest);
         let atlas = Atlas {
             atlas_info,
-            texture: Texture2D::from_file_with_format(include_bytes!("../atlas.png"), Some(ImageFormat::Png)),
+            texture,
         };
-        h.insert("dungeon".to_owned(), atlas);
-
-        let f = std::fs::File::open("tall.json").unwrap();
-        let buf = BufReader::new(f);
-        let atlas_info = serde_json::from_reader(buf).unwrap();
-        let atlas = Atlas {
-            atlas_info,
-            texture: Texture2D::from_file_with_format(include_bytes!("../tall.png"), Some(ImageFormat::Png)),
-        };
-        h.insert("common_objects".to_owned(), atlas);
-
-        h
+        self.insert(atlas_id.to_owned(), atlas);
     }
 }
 
@@ -90,16 +85,21 @@ struct Player {
     direction: i32,
 }
 
+#[derive(Deserialize)]
 struct AtlasMap {
     width: usize,
     height: usize,
-    walls: Vec<Vec<u8>>,
-    objects: Vec<Vec<u8>>,
+    wall: Vec<Vec<u8>>,
+    floor: Vec<Vec<u8>>,
+    ceiling: Vec<Vec<u8>>,
+    object: Vec<Vec<u8>>,
 }
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let atlas = AtlasCollection::load();
+    let mut atlas = AtlasCollection::new();
+    atlas.load("dungeon", include_bytes!("../mansion.png"), "mansion.json");
+    atlas.load("common_objects", include_bytes!("../common_objects.png"), "common_objects.json");
 
     let mut player = Player {
         x: 1,
@@ -107,38 +107,17 @@ async fn main() {
         direction: 2,
     };
 
-    let map = AtlasMap {
-        width: 8,
-        height: 8,
-        walls: vec![
-            vec![1, 1, 1, 1, 1, 1, 1, 1],
-            vec![1, 0, 1, 0, 1, 0, 0, 1],
-            vec![1, 0, 1, 0, 0, 1, 0, 1],
-            vec![1, 0, 0, 0, 0, 0, 0, 1],
-            vec![1, 0, 0, 1, 1, 0, 1, 1],
-            vec![1, 0, 0, 0, 0, 0, 1, 1],
-            vec![1, 0, 1, 0, 1, 0, 0, 1],
-            vec![1, 1, 1, 1, 1, 1, 1, 1],
-        ],
-        objects: vec![
-            vec![0,0,0,0,0,0,0,0],
-            vec![0,0,0,1,0,0,0,0],
-            vec![0,0,0,0,0,0,0,0],
-            vec![0,0,0,0,0,0,0,0],
-            vec![0,0,0,0,0,0,0,0],
-            vec![0,0,0,0,0,0,0,0],
-            vec![0,1,0,0,0,0,0,0],
-            vec![0,0,0,0,0,0,0,0]
-        ],
-    };
+    let f = std::fs::File::open("out.json").unwrap();
+    let file_buf = BufReader::new(f);
+    let map = serde_json::from_reader(file_buf).unwrap();
 
-    let render_depth = 4;
-    let render_width = 6;
+    let render_depth = 9;
+    let render_width = 22;
 
     let mut fullscreen = false;
 
     loop {
-        clear_background(BLACK);
+        clear_background(GRAY);
 
         if is_key_pressed(KeyCode::F) {
             fullscreen = !fullscreen;
@@ -166,6 +145,8 @@ async fn main() {
             turn_right(&mut player);
         }
 
+        draw_rectangle(0.0, 0.0, screen_width() * 0.7, screen_height() * 0.7, BLACK);
+
         for z in -render_depth..1 {
             for x in (-render_width / 2)..=(render_width / 2) {
                 draw_floor(&atlas, &player, &map, x, z)
@@ -189,7 +170,7 @@ async fn main() {
         }
 
         draw_text(
-            format!("FPS: {}", get_fps()).as_str(),
+            &format!("FPS: {}", get_fps()),
             10.0,
             50.0,
             40.0,
@@ -247,7 +228,8 @@ fn draw_floor(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, 
     let p = get_player_direction_vector_offsets(player, x, z);
 
     if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        draw_tile(atlas, "dungeon", "floor", x, z, None);
+        let map_value = map.floor[p.y as usize][p.x as usize];
+        draw_tile(atlas, "dungeon", &format!("floor-{map_value}"), x, z, None);
     }
 }
 
@@ -255,7 +237,8 @@ fn draw_ceiling(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32
     let p = get_player_direction_vector_offsets(player, x, z);
 
     if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        draw_tile(atlas, "dungeon", "ceiling", x, z, None);
+        let map_value = map.ceiling[p.y as usize][p.x as usize];
+        draw_tile(atlas, "dungeon", &format!("ceiling-{map_value}"), x, z, None);
     }
 }
 
@@ -263,12 +246,12 @@ fn draw_map_square(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: 
     let p = get_player_direction_vector_offsets(player, x, z);
 
     if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        if map.walls[p.y as usize][p.x as usize] == 1 {
+        if map.wall[p.y as usize][p.x as usize] != 0 {
             draw_side_walls(atlas, player, map, x, z);
             draw_front_walls(atlas, player, map, x, z);
         }
 
-        if map.objects[p.y as usize][p.x as usize] == 1 {
+        if map.object[p.y as usize][p.x as usize] == 1 {
             draw_objects(atlas, player, map, x, z);
         }
     }
@@ -278,9 +261,10 @@ fn draw_side_walls(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: 
     let p = get_player_direction_vector_offsets(player, x, z);
 
     if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        if map.walls[p.y as usize][p.x as usize] == 1 {
-            draw_tile(atlas, "dungeon", "wall", x, z, Some("left".to_owned()));
-            draw_tile(atlas, "dungeon", "wall", x, z, Some("right".to_owned()));
+        let wall_value = map.wall[p.y as usize][p.x as usize];
+        if wall_value != 0 {
+            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("left".to_owned()));
+            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("right".to_owned()));
         }
     }
 }
@@ -289,8 +273,9 @@ fn draw_front_walls(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x:
     let p = get_player_direction_vector_offsets(player, x, z);
 
     if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        if map.walls[p.y as usize][p.x as usize] == 1 {
-            draw_tile(atlas, "dungeon", "wall", x, z, Some("front".to_owned()));
+        let wall_value = map.wall[p.y as usize][p.x as usize];
+        if wall_value != 0 {
+            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("front".to_owned()));
         }
     }
 }
@@ -300,8 +285,9 @@ fn draw_objects(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32
 	let p = get_player_direction_vector_offsets(player, x, z);
 	
 	if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-		if map.objects[p.y as usize][p.x as usize] == 1 {
-			draw_tile(atlas, "common_objects", "tall", x, z, None);
+        let map_value = map.object[p.y as usize][p.x as usize];
+		if map_value != 0 {
+            draw_tile(atlas, "common_objects", &format!("object-{map_value}"), x, z, None);
         }
     }
 }
@@ -323,15 +309,15 @@ fn draw_tile(
     };
 
     if let Some(tile) = tile {
-        let scale_x = screen_width() / 640.0;
-        let scale_y = screen_height() / 360.0;
+        let scale_x = screen_width() / VIEWPORT_WIDTH as f32 * 0.7;
+        let scale_y = screen_height() / VIEWPORT_HEIGHT as f32 * 0.7;
         draw_texture_ex(
             tex,
-            tile.screen_coords.x as f32 * scale_x,
-            tile.screen_coords.y as f32 * scale_y,
+            (tile.screen_coords.x as f32 * scale_x).ceil(),
+            (tile.screen_coords.y as f32 * scale_y).ceil(),
             WHITE,
             DrawTextureParams {
-                dest_size: Some(vec2(scale_x * tile.atlas_coords.w as f32, scale_y * tile.atlas_coords.h as f32)),
+                dest_size: Some(vec2(scale_x * tile.screen_coords.w as f32 + 1.0, scale_y * tile.screen_coords.h as f32 + 1.0).ceil()),
                 source: Some(Rect::new(
                     tile.atlas_coords.x as f32,
                     tile.atlas_coords.y as f32,
@@ -345,7 +331,7 @@ fn draw_tile(
 }
 
 fn can_move(map: &AtlasMap, pos: IVec2) -> bool {
-	return map.walls[pos.y as usize][pos.x as usize] != 1
+	return map.wall[pos.y as usize][pos.x as usize] == 0
 }
 
 fn invert_direction(direction: i32) -> i32 {
