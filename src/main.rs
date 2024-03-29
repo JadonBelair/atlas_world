@@ -99,10 +99,13 @@ async fn main() {
         y: 1,
         direction: 2,
     };
+    
+    let mut show_map = false;
 
     let f = std::fs::File::open("map.json").unwrap();
     let file_buf = BufReader::new(f);
-    let map = serde_json::from_reader(file_buf).unwrap();
+    let map: AtlasMap = serde_json::from_reader(file_buf).unwrap();
+    let mut auto_map = vec![vec![false; map.width]; map.height];
 
     let render_depth = 9;
     let render_width = 22;
@@ -114,16 +117,16 @@ async fn main() {
 
     let zoom = vec2(1.0 / VIEWPORT_WIDTH as f32 * 2.0, 1.0 / VIEWPORT_HEIGHT as f32 * 2.0);
 
+    let font = load_ttf_font("./assets/Minecraft.ttf").await.unwrap();
+
     let skin = {
         let button_style = root_ui()
             .style_builder()
             .background(load_image("./assets/button.png").await.unwrap())
-            .background_hovered(load_image("./assets/button_hover.png").await.unwrap())
-            .background_clicked(load_image("./assets/button.png").await.unwrap())
             .background_margin(RectOffset { left: 6.0, right: 6.0, bottom: 6.0, top: 6.0 })
             .color(WHITE)
+            .color_hovered(Color::new(0.75, 0.75, 0.75, 1.0))
             .color_selected_hovered(WHITE)
-            .color_hovered(WHITE)
             .color_selected(WHITE)
             .color_inactive(WHITE)
             .color_clicked(WHITE)
@@ -164,11 +167,18 @@ async fn main() {
             .color_inactive(Color::new(0.0, 0.0, 0.0, 0.0))
             .color_selected_hovered(Color::new(0.0, 0.0, 0.0, 0.0))
             .build();
+
+        let label_style = root_ui()
+            .style_builder()
+            .font_size(26)
+            .font(include_bytes!("../assets/Minecraft.ttf")).unwrap()
+            .build();
             
         Skin {
             button_style,
             window_style,
             window_titlebar_style,
+            label_style,
             scroll_width: 0.0,
             title_height: 0.0,
             scrollbar_handle_style: scrollbar_style,
@@ -186,28 +196,29 @@ async fn main() {
     };
 
     let sword_image = image::open("./assets/sword_icon.png").unwrap();
-    let mut sword_texture = Texture2D::from_rgba8(sword_image.width() as u16, sword_image.height() as u16, &sword_image.to_rgba8());
+    let sword_texture = Texture2D::from_rgba8(sword_image.width() as u16, sword_image.height() as u16, &sword_image.to_rgba8());
 
     let shield_image = image::open("./assets/shield_icon.png").unwrap();
-    let mut shield_texture = Texture2D::from_rgba8(shield_image.width() as u16, shield_image.height() as u16, &shield_image.to_rgba8());
+    let shield_texture = Texture2D::from_rgba8(shield_image.width() as u16, shield_image.height() as u16, &shield_image.to_rgba8());
 
     let parry_image = image::open("./assets/parry_icon.png").unwrap();
-    let mut parry_texture = Texture2D::from_rgba8(parry_image.width() as u16, parry_image.height() as u16, &parry_image.to_rgba8());
+    let parry_texture = Texture2D::from_rgba8(parry_image.width() as u16, parry_image.height() as u16, &parry_image.to_rgba8());
 
     let charge_image = image::open("./assets/charge_icon.png").unwrap();
-    let mut charge_texture = Texture2D::from_rgba8(charge_image.width() as u16, charge_image.height() as u16, &charge_image.to_rgba8());
+    let charge_texture = Texture2D::from_rgba8(charge_image.width() as u16, charge_image.height() as u16, &charge_image.to_rgba8());
 
     let forward_image = image::open("./assets/forward_arrow.png").unwrap();
-    let mut forward_texture = Texture2D::from_rgba8(forward_image.width() as u16, forward_image.height() as u16, &forward_image.to_rgba8());
-    let mut back_texture = Texture2D::from_rgba8(forward_image.width() as u16, forward_image.height() as u16, &forward_image.flipv().to_rgba8());
-    let mut right_texture = Texture2D::from_rgba8(forward_image.height() as u16, forward_image.width() as u16, &forward_image.rotate90().to_rgba8());
-    let mut left_texture = Texture2D::from_rgba8(forward_image.height() as u16, forward_image.width() as u16, &forward_image.rotate270().to_rgba8());
+    let forward_texture = Texture2D::from_rgba8(forward_image.width() as u16, forward_image.height() as u16, &forward_image.to_rgba8());
+    let back_texture = Texture2D::from_rgba8(forward_image.width() as u16, forward_image.height() as u16, &forward_image.flipv().to_rgba8());
+    let right_texture = Texture2D::from_rgba8(forward_image.height() as u16, forward_image.width() as u16, &forward_image.rotate90().to_rgba8());
+    let left_texture = Texture2D::from_rgba8(forward_image.height() as u16, forward_image.width() as u16, &forward_image.rotate270().to_rgba8());
 
     let turn_image = image::open("./assets/turn_arrow.png").unwrap();
-    let mut turn_left_texture = Texture2D::from_rgba8(turn_image.width() as u16, turn_image.height() as u16, &turn_image.to_rgba8());
-    let mut turn_right_texture = Texture2D::from_rgba8(turn_image.width() as u16, turn_image.height() as u16, &turn_image.fliph().to_rgba8());
+    let turn_left_texture = Texture2D::from_rgba8(turn_image.width() as u16, turn_image.height() as u16, &turn_image.to_rgba8());
+    let turn_right_texture = Texture2D::from_rgba8(turn_image.width() as u16, turn_image.height() as u16, &turn_image.fliph().to_rgba8());
 
-    let mut scaled_image = sword_image.clone();
+    let map_image = image::open("./assets/map_icon.png").unwrap();
+    let map_texture = Texture2D::from_rgba8(map_image.width() as u16, map_image.height() as u16, &map_image.to_rgba8());
 
     let background_image = image::open("./assets/background.png").unwrap();
     let background_texture = Texture2D::from_rgba8(background_image.width() as u16, background_image.height() as u16, &background_image.to_rgba8());
@@ -220,6 +231,10 @@ async fn main() {
         set_camera(&viewport_camera);
 
         clear_background(BLACK);
+
+        if !auto_map[player.y as usize][player.x as usize] {
+            auto_map[player.y as usize][player.x as usize] = true;
+        }
 
         if is_key_pressed(KeyCode::F) {
             fullscreen = !fullscreen;
@@ -245,6 +260,10 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::E) {
             turn_right(&mut player);
+        }
+
+        if is_key_pressed(KeyCode::M) {
+            show_map = !show_map;
         }
 
         for z in -render_depth..1 {
@@ -274,79 +293,135 @@ async fn main() {
 
         draw_texture_ex(&screen.texture, 10.0, 10.0, WHITE, DrawTextureParams {
             dest_size: Some(dest_size),
-            // dest_size: Some(vec2(screen_width() * 0.7, screen_height() * 0.7)),
             ..Default::default()
         });
+
         // draws the border around the viewport
-        // root_ui().window(hash!(), vec2(10.0, 10.0), dest_size, |_| {});
         macroquad::ui::widgets::Window::new(hash!(), vec2(10.0, 10.0), dest_size).movable(false).close_button(false).ui(&mut root_ui(), |_| {});
 
-        draw_text(
-            &format!("FPS: {}", get_fps()),
-            20.0,
-            50.0,
-            40.0,
-            GREEN,
-        );
+        let map_size = dest_size * 0.9;
+        let map_pos = vec2(10.0 + dest_size.x * 0.05, 10.0 + dest_size.y * 0.05);
+
+        if show_map {
+            // map border
+            macroquad::ui::widgets::Window::new(hash!(), map_pos, map_size).movable(false).close_button(false).ui(&mut root_ui(), |_| {});
+
+            draw_rectangle(map_pos.x, map_pos.y, map_size.x, map_size.y, BLACK);
+            let map_pos = map_pos + 18.0;
+
+            // let total_cells = vec2( (map_size.x - 36.0) / 15.0, (map_size.y - 36.0) / 15.0).floor();
+            let total_cells = vec2(50.0, 40.0);
+            let cell_size = ((map_size.x - 36.0) / total_cells.x).min((map_size.y - 36.0) / total_cells.y);
+
+            let mut start_y = (player.y - (total_cells.y / 2.0) as i32).max(0);
+            let mut end_y = (start_y + total_cells.y as i32).min(map.height as i32);
+            if (start_y..end_y).len() < total_cells.y as usize {
+                let diff = total_cells.y as i32 - (start_y..end_y).len() as i32;
+                start_y -= diff;
+                end_y += diff;
+            }
+
+            let mut start_x = (player.x - (total_cells.x / 2.0) as i32).max(0);
+            let mut end_x = (start_x + total_cells.x as i32).min(map.width as i32);
+            if (start_x..end_x).len() < total_cells.x as usize {
+                let diff = total_cells.x as i32 - (start_x..end_x).len() as i32;
+                start_x -= diff;
+                end_x += diff;
+            }
+
+            let mut draw_y = 0;
+            for y in start_y..end_y {
+                let mut draw_x = 0;
+                for x in start_x..end_x {
+                    if x >= 0 && y >= 0 && x < map.width as i32 && y < map.height as i32 {
+                        if auto_map[y as usize][x as usize] {
+                            draw_rectangle(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), cell_size, cell_size, GRAY);
+                            if x >= 0 {
+                                if x == 0 || map.wall[y as usize][x as usize - 1] != 0 {
+                                    draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
+                                }
+                            }
+                            if x <= map.width as i32 - 1 {
+                                if x == map.width as i32 - 1 || map.wall[y as usize][x as usize + 1] != 0 {
+                                    draw_line(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
+                                }
+                            }
+                            if y >= 0 {
+                                if y == 0 || map.wall[y as usize - 1][x as usize] != 0 {
+                                    draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32), cell_size / 5.0, WHITE);
+                                }
+                            }
+                            if y <= map.height as i32 - 1{
+                                if y == map.height as i32 - 1 || map.wall[y as usize + 1][x as usize] != 0 {
+                                    draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
+                                }
+                            }
+                            if map.object[y as usize][x as usize] != 0 {
+                                draw_circle(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size / 2.0, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size / 2.0, cell_size / 4.0, WHITE);
+                            }
+                        }
+                        if player.x == x && player.y == y {
+                            draw_circle(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size / 2.0, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size / 2.0, cell_size / 3.0, GREEN);
+                        }
+                        draw_x += 1;
+                    }
+                }
+                if y >= 0 {draw_y += 1;}
+            }
+        }
 
         let right_side = dest_size.x + 20.0;
 
-        let mut new_size = (((screen_width() - right_side) - 10.0 - 36.0) / 3.0).max(20.0) as u32 - 20;
-        if screen_height() < (new_size + 20) as f32 * 4.0 + 20.0 + 36.0 {
-            new_size = ((screen_height() - 20.0 - 36.0) / 4.0).max(20.0) as u32 - 20;
-        }
-        if new_size != scaled_image.width() {
-            scaled_image = sword_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            sword_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-            scaled_image = shield_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            shield_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-            scaled_image = parry_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            parry_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-            scaled_image = charge_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            charge_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-
-            scaled_image = forward_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            forward_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-            back_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.flipv().to_rgba8());
-            right_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.rotate90().to_rgba8());
-            left_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.rotate270().to_rgba8());
-
-            scaled_image = turn_image.resize(new_size, new_size, image::imageops::FilterType::Nearest);
-            turn_left_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.to_rgba8());
-            turn_right_texture = Texture2D::from_rgba8(scaled_image.width() as u16, scaled_image.height() as u16, &scaled_image.fliph().to_rgba8());
+        let mut button_size = ((screen_width() - right_side) - 10.0 - 36.0) / 3.0;
+        if screen_height() - 10.0 - 36.0 - button_size < button_size * 4.0 + 20.0 + 36.0 {
+            button_size = (screen_height() - 30.0 - 72.0) / 5.0;
         }
 
-        let button_size = new_size as f32 + 20.0;
-
-        let win_pos = vec2(right_side, screen_height() - button_size * 4.0 - 10.0 - 36.0);
+        let win_pos = vec2(right_side, (screen_height() - button_size * 4.0 - 10.0 - 36.0).max(20.0 + 36.0 + button_size));
         let win_size = vec2(button_size * 3.0 + 36.0, button_size * 4.0 + 36.0);
 
-        macroquad::ui::widgets::Window::new(hash!(), win_pos, win_size).movable(false).close_button(false).ui(&mut root_ui(), |ui| {
-            ui.button(Some(vec2(button_size, 0.0)), charge_texture.clone());
-            ui.button(Some(vec2(button_size * 2.0, button_size)), sword_texture.clone());
-            ui.button(Some(vec2(button_size, button_size)), shield_texture.clone());
-            ui.button(Some(vec2(0.0, button_size)), parry_texture.clone());
+        let window_hash = hash!();
+        macroquad::ui::widgets::Window::new(window_hash, win_pos, win_size).movable(false).close_button(false).ui(&mut root_ui(), |ui| {
+            macroquad::ui::widgets::Button::new(charge_texture.clone()).position(vec2(button_size, 0.0)).size(vec2(button_size, button_size)).ui(ui);
+            macroquad::ui::widgets::Button::new(sword_texture.clone()).position(vec2(0.0, button_size)).size(vec2(button_size, button_size)).ui(ui);
+            macroquad::ui::widgets::Button::new(shield_texture.clone()).position(vec2(button_size, button_size)).size(vec2(button_size, button_size)).ui(ui);
+            macroquad::ui::widgets::Button::new(parry_texture.clone()).position(vec2(button_size * 2.0, button_size)).size(vec2(button_size, button_size)).ui(ui);
 
-            if ui.button(Some(vec2(button_size, 2.0 * button_size)), forward_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(forward_texture.clone()).position(vec2(button_size, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
                 move_forward(&mut player, &map);
             }
-            if ui.button(Some(vec2(0.0, 2.0 * button_size)), turn_left_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(turn_left_texture.clone()).position(vec2(0.0, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
                 turn_left(&mut player);
             }
-            if ui.button(Some(vec2(button_size * 2.0, 2.0 * button_size)), turn_right_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(turn_right_texture.clone()).position(vec2(button_size * 2.0, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
                 turn_right(&mut player);
             }
-            if ui.button(Some(vec2(button_size, 3.0 * button_size)), back_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(back_texture.clone()).position(vec2(button_size, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
                 move_backward(&mut player, &map);
             }
-            if ui.button(Some(vec2(0.0, 3.0 * button_size)), left_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(left_texture.clone()).position(vec2(0.0, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
                 strafe_left(&mut player, &map);
             }
-            if ui.button(Some(vec2(button_size * 2.0, 3.0 * button_size)), right_texture.clone()) {
+            if macroquad::ui::widgets::Button::new(right_texture.clone()).position(vec2(button_size * 2.0, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
                 strafe_right(&mut player, &map);
+            }
+
+            if macroquad::ui::widgets::Button::new(map_texture.clone()).position(vec2(0.0, 0.0)).size(vec2(button_size, button_size)).ui(ui) {
+                show_map = !show_map;
             }
         });
 
+        let win_pos = vec2(right_side, 10.0);
+        let win_size = vec2(win_size.x, button_size + 36.0);
+        macroquad::ui::widgets::Window::new(hash!(), win_pos, win_size).movable(false).close_button(false).ui(&mut root_ui(), |ui| {
+            let mut canvas = ui.canvas();
+            let cursor = canvas.cursor();
+            canvas.rect(Rect::new(cursor.x, cursor.y, button_size * 3.0, button_size / 4.0), Color::default(), GRAY);
+            canvas.rect(Rect::new(cursor.x, cursor.y, button_size * 3.0 * (5.0 / 20.0), button_size / 4.0), Color::default(), RED);
+            let text_size = measure_text("15/20", Some(&font), 26, 1.0);
+            macroquad::ui::widgets::Label::new(&format!("15/20")).position(vec2(((win_size.x - 36.0) / 2.0) - (text_size.width / 2.0), button_size / 8.0 - (text_size.height / 2.0))).ui(ui);
+        });
+        root_ui().focus_window(window_hash);
 
         next_frame().await;
     }
@@ -386,11 +461,7 @@ fn get_tile_from_atlas(
 
     for tile in &layer.tiles {
         if tile.x == x && tile.z == z {
-            if tile.orientation.is_some() {
-                if tile.orientation == orientation {
-                    return Some(tile.clone());
-                }
-            } else {
+            if tile.orientation.is_none() || tile.orientation == orientation {
                 return Some(tile.clone());
             }
         }
@@ -469,8 +540,6 @@ fn draw_objects(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32
     
 	let p = get_player_direction_vector_offsets(player, x, z);
 	
-    // println!("{x} {z}");
-
 	if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
         let map_value = map.object[p.y as usize][p.x as usize];
 		if map_value != 0 {
@@ -523,7 +592,7 @@ fn draw_tile(
 }
 
 fn can_move(map: &AtlasMap, pos: IVec2) -> bool {
-	return map.wall[pos.y as usize][pos.x as usize] == 0
+	return (pos.x >= 0 && pos.y >= 0 && pos.x < map.width as i32 && pos.y < map.height as i32) && map.wall[pos.y as usize][pos.x as usize] == 0
 }
 
 fn invert_direction(direction: i32) -> i32 {
