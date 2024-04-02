@@ -1,11 +1,7 @@
-use std::{io::BufReader, path::Path};
+use std::io::BufReader;
 
+use atlas_world::*;
 use macroquad::{prelude::*, ui::{root_ui, Skin, hash}};
-use serde::{Deserialize, Serialize};
-use ahash::AHashMap;
-
-const VIEWPORT_WIDTH: i32 = 320;
-const VIEWPORT_HEIGHT: i32 = 256;
 
 fn window_conf() -> Conf {
     Conf {
@@ -17,84 +13,13 @@ fn window_conf() -> Conf {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
-struct Coords {
-    h: i32,
-    w: i32,
-    x: i32,
-    y: i32,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Tile {
-    atlas_coords: Coords,
-    screen_coords: Coords,
-    x: i32,
-    z: i32,
-    orientation: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Tiles {
-    mode: i32,
-    name: String,
-    tiles: Vec<Tile>,
-    r#type: i32,
-}
-
-#[derive(Serialize, Deserialize)]
-struct AtlasInfo {
-    layers: AHashMap<String, Tiles>,
-}
-
-struct Atlas {
-    atlas_info: AtlasInfo,
-    texture: Texture2D,
-}
-
-type AtlasCollection = AHashMap<String, Atlas>;
-trait LoadAtlas {
-    fn load<P: AsRef<Path>>(&mut self, atlas_id: &str, image_data: &[u8], data_path: P);
-}
-
-impl LoadAtlas for AtlasCollection {
-    fn load<P: AsRef<Path>>(&mut self, atlas_id: &str, image_data: &[u8], data_path: P) {
-        let f = std::fs::File::open(data_path).unwrap();
-        let buf = BufReader::new(f);
-        let atlas_info = serde_json::from_reader(buf).unwrap();
-        let texture = Texture2D::from_file_with_format(image_data, None);
-        texture.set_filter(FilterMode::Nearest);
-        let atlas = Atlas {
-            atlas_info,
-            texture,
-        };
-        self.insert(atlas_id.to_owned(), atlas);
-    }
-}
-
-struct Player {
-    x: i32,
-    y: i32,
-    direction: i32,
-}
-
-#[derive(Deserialize)]
-struct AtlasMap {
-    width: usize,
-    height: usize,
-    wall: Vec<Vec<u8>>,
-    floor: Vec<Vec<u8>>,
-    ceiling: Vec<Vec<u8>>,
-    object: Vec<Vec<u8>>,
-}
-
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut atlas = AtlasCollection::new();
     atlas.load("dungeon", include_bytes!("../mansion.png"), "mansion.json");
     atlas.load("common_objects", include_bytes!("../common_objects.png"), "common_objects.json");
 
-    let mut player = Player {
+    let player = Player {
         x: 1,
         y: 1,
         direction: 2,
@@ -227,13 +152,21 @@ async fn main() {
     let ctx = gl.quad_context;
     ctx.texture_set_wrap(background_texture.raw_miniquad_id(), miniquad::TextureWrap::Repeat, miniquad::TextureWrap::Repeat);
 
+    let mut world = AtlasWorld {
+        player,
+        map,
+        collection: atlas,
+        render_depth,
+        render_width
+    };
+
     loop {
         set_camera(&viewport_camera);
 
         clear_background(BLACK);
 
-        if !auto_map[player.y as usize][player.x as usize] {
-            auto_map[player.y as usize][player.x as usize] = true;
+        if !auto_map[world.player.y as usize][world.player.x as usize] {
+            auto_map[world.player.y as usize][world.player.x as usize] = true;
         }
 
         if is_key_pressed(KeyCode::F) {
@@ -242,39 +175,31 @@ async fn main() {
         }
 
         if is_key_pressed(KeyCode::W) {
-            move_forward(&mut player, &map);
+            world.player.move_forward(&world.map);
         }
         if is_key_pressed(KeyCode::S) {
-            move_backward(&mut player, &map);
+            world.player.move_backward(&world.map);
         }
 
         if is_key_pressed(KeyCode::A) {
-            strafe_left(&mut player, &map);
+            world.player.strafe_left(&world.map);
         }
         if is_key_pressed(KeyCode::D) {
-            strafe_right(&mut player, &map);
+            world.player.strafe_right(&world.map);
         }
 
         if is_key_pressed(KeyCode::Q) {
-            turn_left(&mut player);
+            world.player.turn_left();
         }
         if is_key_pressed(KeyCode::E) {
-            turn_right(&mut player);
+            world.player.turn_right();
         }
 
         if is_key_pressed(KeyCode::M) {
             show_map = !show_map;
         }
 
-        for z in -render_depth..1 {
-            for x in (-render_width / 2)..0 {
-                draw_map_square(&atlas, &player, &map, x, z);
-            }
-            for x in (0..=(render_width / 2)).rev() {
-                draw_map_square(&atlas, &player, &map, x, z);
-            }
-        }
-
+        world.render();
 
         set_default_camera();
 
@@ -313,16 +238,16 @@ async fn main() {
             let total_cells = vec2(50.0, 40.0);
             let cell_size = ((map_size.x - 36.0) / total_cells.x).min((map_size.y - 36.0) / total_cells.y);
 
-            let mut start_y = (player.y - (total_cells.y / 2.0) as i32).max(0);
-            let mut end_y = (start_y + total_cells.y as i32).min(map.height as i32);
+            let mut start_y = (world.player.y - (total_cells.y / 2.0) as i32).max(0);
+            let mut end_y = (start_y + total_cells.y as i32).min(world.map.height as i32);
             if (start_y..end_y).len() < total_cells.y as usize {
                 let diff = total_cells.y as i32 - (start_y..end_y).len() as i32;
                 start_y -= diff;
                 end_y += diff;
             }
 
-            let mut start_x = (player.x - (total_cells.x / 2.0) as i32).max(0);
-            let mut end_x = (start_x + total_cells.x as i32).min(map.width as i32);
+            let mut start_x = (world.player.x - (total_cells.x / 2.0) as i32).max(0);
+            let mut end_x = (start_x + total_cells.x as i32).min(world.map.width as i32);
             if (start_x..end_x).len() < total_cells.x as usize {
                 let diff = total_cells.x as i32 - (start_x..end_x).len() as i32;
                 start_x -= diff;
@@ -333,34 +258,34 @@ async fn main() {
             for y in start_y..end_y {
                 let mut draw_x = 0;
                 for x in start_x..end_x {
-                    if x >= 0 && y >= 0 && x < map.width as i32 && y < map.height as i32 {
+                    if x >= 0 && y >= 0 && x < world.map.width as i32 && y < world.map.height as i32 {
                         if auto_map[y as usize][x as usize] {
                             draw_rectangle(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), cell_size, cell_size, GRAY);
                             if x >= 0 {
-                                if x == 0 || map.wall[y as usize][x as usize - 1] != 0 {
+                                if x == 0 || world.map.wall[y as usize][x as usize - 1] != 0 {
                                     draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
                                 }
                             }
-                            if x <= map.width as i32 - 1 {
-                                if x == map.width as i32 - 1 || map.wall[y as usize][x as usize + 1] != 0 {
+                            if x <= world.map.width as i32 - 1 {
+                                if x == world.map.width as i32 - 1 || world.map.wall[y as usize][x as usize + 1] != 0 {
                                     draw_line(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
                                 }
                             }
                             if y >= 0 {
-                                if y == 0 || map.wall[y as usize - 1][x as usize] != 0 {
+                                if y == 0 || world.map.wall[y as usize - 1][x as usize] != 0 {
                                     draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32), map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32), cell_size / 5.0, WHITE);
                                 }
                             }
-                            if y <= map.height as i32 - 1{
-                                if y == map.height as i32 - 1 || map.wall[y as usize + 1][x as usize] != 0 {
+                            if y <= world.map.height as i32 - 1{
+                                if y == world.map.height as i32 - 1 || world.map.wall[y as usize + 1][x as usize] != 0 {
                                     draw_line(map_pos.x as f32 + (cell_size * draw_x as f32), map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size, cell_size / 5.0, WHITE);
                                 }
                             }
-                            if map.object[y as usize][x as usize] != 0 {
+                            if world.map.object[y as usize][x as usize] != 0 {
                                 draw_circle(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size / 2.0, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size / 2.0, cell_size / 4.0, WHITE);
                             }
                         }
-                        if player.x == x && player.y == y {
+                        if world.player.x == x && world.player.y == y {
                             draw_circle(map_pos.x as f32 + (cell_size * draw_x as f32) + cell_size / 2.0, map_pos.y as f32 + (cell_size * draw_y as f32) + cell_size / 2.0, cell_size / 3.0, GREEN);
                         }
                         draw_x += 1;
@@ -388,22 +313,22 @@ async fn main() {
             macroquad::ui::widgets::Button::new(parry_texture.clone()).position(vec2(button_size * 2.0, button_size)).size(vec2(button_size, button_size)).ui(ui);
 
             if macroquad::ui::widgets::Button::new(forward_texture.clone()).position(vec2(button_size, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
-                move_forward(&mut player, &map);
+                world.player.move_forward(&world.map);
             }
             if macroquad::ui::widgets::Button::new(turn_left_texture.clone()).position(vec2(0.0, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
-                turn_left(&mut player);
+                world.player.turn_left();
             }
             if macroquad::ui::widgets::Button::new(turn_right_texture.clone()).position(vec2(button_size * 2.0, button_size * 2.0)).size(vec2(button_size, button_size)).ui(ui) {
-                turn_right(&mut player);
+                world.player.turn_right();
             }
             if macroquad::ui::widgets::Button::new(back_texture.clone()).position(vec2(button_size, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
-                move_backward(&mut player, &map);
+                world.player.move_backward(&world.map);
             }
             if macroquad::ui::widgets::Button::new(left_texture.clone()).position(vec2(0.0, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
-                strafe_left(&mut player, &map);
+                world.player.strafe_left(&world.map);
             }
             if macroquad::ui::widgets::Button::new(right_texture.clone()).position(vec2(button_size * 2.0, button_size * 3.0)).size(vec2(button_size, button_size)).ui(ui) {
-                strafe_right(&mut player, &map);
+                world.player.strafe_right(&world.map);
             }
 
             if macroquad::ui::widgets::Button::new(map_texture.clone()).position(vec2(0.0, 0.0)).size(vec2(button_size, button_size)).ui(ui) {
@@ -427,49 +352,6 @@ async fn main() {
     }
 }
 
-fn get_player_direction_vector_offsets(player: &Player, x: i32, z: i32) -> IVec2 {
-    if player.direction == 0 {
-        return IVec2::new(player.x + x, player.y + z);
-    } else if player.direction == 1 {
-        return IVec2::new(player.x - z, player.y + x);
-    } else if player.direction == 2 {
-        return IVec2::new(player.x - x, player.y - z);
-    } else if player.direction == 3 {
-        return IVec2::new(player.x + z, player.y - x);
-    }
-
-    IVec2::NEG_ONE
-}
-
-fn get_tile_from_atlas(
-    atlas: &AtlasCollection,
-    atlas_id: &str,
-    layer_id: &str,
-    x: i32,
-    z: i32,
-    orientation: Option<String>,
-) -> Option<Tile> {
-    let layer = if let Some(atlas_info) = atlas.get(atlas_id) {
-        if let Some(layer) = atlas_info.atlas_info.layers.get(layer_id) {
-            layer
-        } else {
-            return None
-        }
-    } else {
-        return None;
-    };
-
-    for tile in &layer.tiles {
-        if tile.x == x && tile.z == z {
-            if tile.orientation.is_none() || tile.orientation == orientation {
-                return Some(tile.clone());
-            }
-        }
-    }
-
-    None
-}
-
 // fn draw_floor(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, z: i32) {
 //     let p = get_player_direction_vector_offsets(player, x, z);
 // 
@@ -488,187 +370,3 @@ fn get_tile_from_atlas(
 //     }
 // }
 
-fn draw_map_square(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, z: i32) {
-    let p = get_player_direction_vector_offsets(player, x, z);
-
-    if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        if map.floor[p.y as usize][p.x as usize] != 0 {
-            let map_value = map.floor[p.y as usize][p.x as usize];
-            draw_tile(atlas, "dungeon", &format!("floor-{map_value}"), x, z, None);
-        }
-        
-        if map.ceiling[p.y as usize][p.x as usize] != 0 {
-            let map_value = map.ceiling[p.y as usize][p.x as usize];
-            draw_tile(atlas, "dungeon", &format!("ceiling-{map_value}"), x, z, None);
-        }
-
-        if map.wall[p.y as usize][p.x as usize] != 0 {
-            draw_side_walls(atlas, player, map, x, z);
-            draw_front_walls(atlas, player, map, x, z);
-        }
-
-        if map.object[p.y as usize][p.x as usize] != 0 {
-            draw_objects(atlas, player, map, x, z);
-        }
-    }
-}
-
-fn draw_side_walls(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, z: i32) {
-    let p = get_player_direction_vector_offsets(player, x, z);
-
-    if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        let wall_value = map.wall[p.y as usize][p.x as usize];
-        if wall_value != 0 {
-            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("left".to_owned()));
-            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("right".to_owned()));
-        }
-    }
-}
-
-fn draw_front_walls(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, z: i32) {
-    let p = get_player_direction_vector_offsets(player, x, z);
-
-    if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        let wall_value = map.wall[p.y as usize][p.x as usize];
-        if wall_value != 0 {
-            draw_tile(atlas, "dungeon", &format!("wall-{wall_value}"), x, z, Some("front".to_owned()));
-        }
-    }
-}
-
-fn draw_objects(atlas: &AtlasCollection, player: &Player, map: &AtlasMap, x: i32, z: i32) {
-    
-	let p = get_player_direction_vector_offsets(player, x, z);
-	
-	if p.x >= 0 && p.y >= 0 && p.x < map.width as i32 && p.y < map.height as i32 {
-        let map_value = map.object[p.y as usize][p.x as usize];
-		if map_value != 0 {
-            let orientation = Some(match player.direction {
-                0 => "front",
-                1 => "right",
-                2 => "back",
-                3 => "left",
-                _ => unreachable!()
-            }.to_owned());
-            draw_tile(atlas, "common_objects", &format!("object-{map_value}"), x, z, orientation);
-        }
-    }
-}
-
-fn draw_tile(
-    atlas: &AtlasCollection,
-    atlas_id: &str,
-    layer_id: &str,
-    x: i32,
-    z: i32,
-    orientation: Option<String>,
-) {
-    let tile = get_tile_from_atlas(atlas, atlas_id, layer_id, x, z, orientation);
-
-    let tex = if let Some(atlas_info) = atlas.get(atlas_id) {
-        &atlas_info.texture
-    } else {
-        return;
-    };
-
-    if let Some(tile) = tile {
-        draw_texture_ex(
-            tex,
-            tile.screen_coords.x as f32,
-            tile.screen_coords.y as f32,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(tile.screen_coords.w as f32, tile.screen_coords.h as f32)),
-                source: Some(Rect::new(
-                    tile.atlas_coords.x as f32,
-                    tile.atlas_coords.y as f32,
-                    tile.atlas_coords.w as f32,
-                    tile.atlas_coords.h as f32,
-                )),
-                ..Default::default()
-            },
-        );
-    }
-}
-
-fn can_move(map: &AtlasMap, pos: IVec2) -> bool {
-	return (pos.x >= 0 && pos.y >= 0 && pos.x < map.width as i32 && pos.y < map.height as i32) && map.wall[pos.y as usize][pos.x as usize] == 0
-}
-
-fn invert_direction(direction: i32) -> i32 {
-    (direction + 2) % 4
-}
-
-fn get_dest_pos(player: &Player, direction: i32) -> IVec2 {
-	
-	let mut dest_vec = ivec2(
-        ((direction*90) as f32).to_radians().sin() as i32,
-		-(((direction*90) as f32).to_radians().cos() as i32)
-	);
-
-	dest_vec.x = dest_vec.x + player.x;
-	dest_vec.y = dest_vec.y + player.y;
-	
-	return dest_vec;
-}
-				
-fn move_forward(player: &mut Player, map: &AtlasMap) {
-
-	let dest_pos = get_dest_pos(player, player.direction);
-
-	if can_move(map, dest_pos) {
-		player.x = dest_pos.x;
-		player.y = dest_pos.y;
-    }
-}
-	
-fn move_backward(player: &mut Player, map: &AtlasMap) {
-
-	let dest_pos = get_dest_pos(player, invert_direction(player.direction));
-
-	if can_move(map, dest_pos) {
-		player.x = dest_pos.x;
-		player.y = dest_pos.y;
-    }
-}
-		
-fn strafe_left(player: &mut Player, map: &AtlasMap) {
-
-	let mut direction = player.direction - 1;
-	if direction < 0 {
-        direction = 3;
-    }
-	
-	let dest_pos = get_dest_pos(player, direction);
-
-	if can_move(map, dest_pos) {
-		player.x = dest_pos.x;
-		player.y = dest_pos.y;
-    }
-}
-	
-fn strafe_right(player: &mut Player, map: &AtlasMap) {
-
-	let direction = (player.direction + 1) % 4;
-	
-	let dest_pos = get_dest_pos(player, direction);
-
-	if can_move(map, dest_pos) {
-		player.x = dest_pos.x;
-		player.y = dest_pos.y;
-    }
-}
-			
-fn turn_left(player: &mut Player) {
-	player.direction = player.direction - 1;
-	if player.direction < 0 {
-		player.direction = 3;
-    }
-}
-		
-fn turn_right(player: &mut Player) {
-	player.direction = player.direction + 1;
-	if player.direction > 3 {
-		player.direction = 0;
-    }
-}
